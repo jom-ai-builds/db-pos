@@ -1,5 +1,10 @@
 name: Build & Deploy to GitHub Pages
 
+permissions:
+  contents: read      # read repo files
+  pages: write        # allow Pages deploy
+  id-token: write     # allow OIDC / id-token (required error fix)
+
 on:
   push:
     branches:
