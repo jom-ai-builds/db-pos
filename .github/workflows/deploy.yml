@@ -1,0 +1,33 @@
+name: Build & Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main   # change this if you deploy from another branch
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create config.js with real Web App URL
+        env:
+          WEB_APP_URL: ${{ secrets.WEB_APP_URL }}
+        run: |
+          if [ -z "$WEB_APP_URL" ]; then
+            echo "WEB_APP_URL secret is not set. Exiting."
+            exit 1
+          fi
+          # write a browser-global variable that app.js will read
+          echo "window.API_BASE=\"${WEB_APP_URL}\";" > ./config.js
+
+      - name: Upload artifact (for GitHub Pages action)
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
