@@ -1,8 +1,11 @@
+// ====================
+// Secure app.js client
+// ====================
+
+// Placeholder — replaced at deployment via GitHub Actions
 const API_BASE = (typeof window !== 'undefined' && window.API_BASE)
   ? window.API_BASE
-  : "YOUR_WEBAPP_URL_HERE"; // fallback, never used in production
-
-let cart = [];
+  : "YOUR_WEBAPP_URL_HERE";
 
 // --------------------
 // API Helper
@@ -20,153 +23,217 @@ async function api(action, data = {}, method = "POST") {
 }
 
 // --------------------
-// Staff Login
+// Cart Handling
 // --------------------
-document.getElementById("loginBtn").addEventListener("click", login);
+let cart = JSON.parse(localStorage.getItem("deli_cart") || '{"items":[]}');
 
-async function login() {
-  const email = document.getElementById("email").value.trim();
-  const password = document.getElementById("password").value.trim();
-  const loginErrorEl = document.getElementById("loginError");
-  loginErrorEl.innerText = "";
-
-  if (!email || !password) {
-    loginErrorEl.innerText = "Email and password required";
-    return;
-  }
-
-  try {
-    const resp = await api("staffLogin", { email, password }, "POST");
-
-    if (resp.success) {
-      sessionStorage.setItem("staffEmail", resp.email);
-      showPOS();
-    } else {
-      loginErrorEl.innerText = resp.message || "Login failed";
-    }
-  } catch (err) {
-    console.error("Login error:", err);
-    loginErrorEl.innerText = "Connection failed";
-  }
-}
-
-// --------------------
-// Show POS interface
-// --------------------
-function showPOS() {
-  document.getElementById("loginBox").style.display = "none";
-  document.getElementById("posContainer").style.display = "block";
-  loadMenu();
-  renderCart();
-}
-
-// --------------------
-// Cart Operations
-// --------------------
-function addToCart(itemId, name, price) {
-  const existing = cart.find(i => i.id === itemId);
-  if (existing) existing.qty += 1;
-  else cart.push({ id: itemId, name, price, qty: 1 });
-  renderCart();
-}
-
-function removeFromCart(itemId) {
-  cart = cart.filter(i => i.id !== itemId);
+function saveCart() {
+  localStorage.setItem("deli_cart", JSON.stringify(cart));
   renderCart();
 }
 
 function clearCart() {
-  cart = [];
-  renderCart();
+  cart = { items: [] };
+  saveCart();
+}
+
+function addToCart(itemId, name, price) {
+  const existing = cart.items.find(i => i.id === itemId);
+  if (existing) {
+    existing.qty += 1;
+  } else {
+    cart.items.push({ id: itemId, name, price, qty: 1 });
+  }
+  saveCart();
+}
+
+function removeFromCart(itemId) {
+  cart.items = cart.items.filter(i => i.id !== itemId);
+  saveCart();
 }
 
 function renderCart() {
   const el = document.getElementById("cart");
-  el.innerHTML = "";
-  if (cart.length === 0) {
+  if (!el) return;
+
+  if (cart.items.length === 0) {
     el.innerHTML = "<p>Cart is empty</p>";
-    document.getElementById("totalDisplay").innerText = "";
     return;
   }
 
-  let total = 0;
-  cart.forEach(i => {
-    total += i.price * i.qty;
-    const div = document.createElement("div");
-    div.innerHTML = `${i.name} x ${i.qty} = ₱${i.price * i.qty} 
-      <button onclick="removeFromCart('${i.id}')">Remove</button>`;
-    el.appendChild(div);
+  let html = "<ul>";
+  cart.items.forEach(i => {
+    html += `<li>${i.name} (₱${i.price}) x ${i.qty} 
+      <button onclick="removeFromCart('${i.id}')">Remove</button></li>`;
   });
-  document.getElementById("totalDisplay").innerText = `Total: ₱${total}`;
+  html += "</ul>";
+  html += `<button onclick="checkout()">Checkout</button>`;
+  el.innerHTML = html;
 }
 
 // --------------------
-// Checkout
+// Checkout & Payments
 // --------------------
-document.getElementById("checkoutBtn").addEventListener("click", checkout);
-
 async function checkout() {
-  const staffEmail = sessionStorage.getItem("staffEmail");
-  if (!staffEmail) {
-    alert("You must log in first.");
-    return;
-  }
+  const method = prompt("Enter payment method (cash/gcash):", "cash");
+  if (!method) return;
 
-  if (cart.length === 0) {
-    alert("Cart is empty");
-    return;
+  let tendered = 0;
+  if (method === "cash") {
+    tendered = Number(prompt("Enter cash amount tendered:", "0")) || 0;
   }
-
-  const payment_method = document.getElementById("paymentMethod").value;
-  const tendered = Number(document.getElementById("tendered").value) || 0;
 
   try {
     const payload = {
-      items: cart.map(i => ({ id: i.id, qty: i.qty })),
-      payment_method,
-      tendered
+      items: cart.items.map(i => ({ id: i.id, qty: i.qty })),
+      payment_method: method,
+      tendered: tendered
     };
 
     const resp = await api("addOrder", payload, "POST");
 
-    if (resp.ok) {
-      alert(`Order placed! ID: ${resp.orderId}\nTotal: ₱${resp.total}\nStatus: ${resp.status}`);
-      clearCart();
-      document.getElementById("tendered").value = "";
-    } else {
-      alert(`Failed to place order: ${resp.error || "Unknown error"}`);
-    }
+    if (resp.error) throw new Error(resp.error);
+
+    alert(`Order saved.\nTotal: ₱${resp.total}\nStatus: ${resp.status}`);
+    clearCart();
   } catch (err) {
-    console.error("Checkout error:", err);
-    alert("Error processing order.");
+    console.error("checkout error:", err);
+    alert("Failed to process order.");
   }
 }
 
 // --------------------
-// Load Menu
+// Menu Management (Admin)
 // --------------------
 async function loadMenu() {
   try {
-    const menu = await api("getMenu", {}, "GET");
-    renderMenu(menu);
+    const resp = await api("getMenu", {}, "GET");
+    if (resp.error) throw new Error(resp.error);
+    renderMenu(resp);
   } catch (err) {
-    console.error("Load menu error:", err);
+    console.error("loadMenu error:", err);
     alert("Failed to load menu.");
   }
 }
 
-function renderMenu(menu) {
+function renderMenu(resp) {
   const el = document.getElementById("menu");
-  el.innerHTML = "";
-  if (!menu || menu.length === 0) {
-    el.innerHTML = "<p>No menu items available.</p>";
-    return;
-  }
+  if (!el) return;
 
-  menu.forEach(item => {
-    const btn = document.createElement("button");
-    btn.innerText = `${item.name} - ₱${item.price}`;
-    btn.onclick = () => addToCart(item.id, item.name, item.price);
-    el.appendChild(btn);
+  let html = "<ul>";
+  resp.forEach(item => {
+    html += `<li>${item.name} (₱${item.price}) 
+      <button onclick="addToCart('${item.id}','${item.name}',${item.price})">Add</button></li>`;
   });
+  html += "</ul>";
+  el.innerHTML = html;
 }
+
+async function addMenuItem() {
+  const id = prompt("Enter item ID:");
+  const name = prompt("Enter item name:");
+  const price = Number(prompt("Enter item price:"));
+  const category = prompt("Enter category:");
+
+  try {
+    const resp = await api("addMenuItem", { item: { id, name, price, category } }, "POST");
+    if (resp.error) throw new Error(resp.error);
+    alert("Item added.");
+    loadMenu();
+  } catch (err) {
+    console.error("addMenuItem error:", err);
+    alert("Failed to add item.");
+  }
+}
+
+async function updateMenuItem() {
+  const id = prompt("Enter item ID to update:");
+  const name = prompt("Enter new name:");
+  const price = Number(prompt("Enter new price:"));
+  const category = prompt("Enter new category:");
+
+  try {
+    const resp = await api("updateMenuItem", { item: { id, name, price, category } }, "POST");
+    if (resp.error) throw new Error(resp.error);
+    alert("Item updated.");
+    loadMenu();
+  } catch (err) {
+    console.error("updateMenuItem error:", err);
+    alert("Failed to update item.");
+  }
+}
+
+async function deleteMenuItem() {
+  const id = prompt("Enter item ID to delete:");
+  try {
+    const resp = await api("deleteMenuItem", { id }, "POST");
+    if (resp.error) throw new Error(resp.error);
+    alert("Item deleted.");
+    loadMenu();
+  } catch (err) {
+    console.error("deleteMenuItem error:", err);
+    alert("Failed to delete item.");
+  }
+}
+
+// --------------------
+// Sales Reports (Admin)
+// --------------------
+async function loadSalesReport() {
+    try {
+      const resp = await api("getReportSales", {}, "GET");
+      if (resp.error) throw new Error(resp.error);
+      renderReport(resp.sales);
+    } catch (err) {
+      console.error("loadSalesReport error:", err);
+      alert("Failed to load sales report.");
+    }
+  }
+  
+  function renderReport(sales) {
+    const el = document.getElementById("report");
+    if (!el) return;
+  
+    if (!sales || sales.length === 0) {
+      el.innerHTML = "<p>No sales data.</p>";
+      return;
+    }
+  
+    let html = "<table><tr><th>Date</th><th>Total</th><th>Status</th></tr>";
+    sales.forEach(s => {
+      html += `<tr><td>${new Date(s.date).toLocaleString()}</td>
+        <td>₱${s.total}</td><td>${s.status}</td></tr>`;
+    });
+    html += "</table>";
+    el.innerHTML = html;
+  }
+  
+  // Trigger browser print
+  function printReport() {
+    window.print();
+  }
+  
+  // --------------------
+  // Event Listeners (for HTML)
+  // --------------------
+  document.addEventListener("DOMContentLoaded", () => {
+    renderCart();
+    loadMenu();
+  
+    // Hook admin buttons if present
+    const addBtn = document.getElementById("btnAddItem");
+    if (addBtn) addBtn.addEventListener("click", addMenuItem);
+  
+    const updateBtn = document.getElementById("btnUpdateItem");
+    if (updateBtn) updateBtn.addEventListener("click", updateMenuItem);
+  
+    const deleteBtn = document.getElementById("btnDeleteItem");
+    if (deleteBtn) deleteBtn.addEventListener("click", deleteMenuItem);
+  
+    const reportBtn = document.getElementById("btnLoadReport");
+    if (reportBtn) reportBtn.addEventListener("click", loadSalesReport);
+  
+    const printBtn = document.getElementById("btnPrintReport");
+    if (printBtn) printBtn.addEventListener("click", printReport); // NEW
+  });
+  
